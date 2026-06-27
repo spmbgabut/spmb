@@ -64,23 +64,23 @@ def cek_web():
             print("Gagal akses web:", e)
             
     if ditemukan:
-        # LOGIKA PERBANDINGAN PERINGKAT YANG SUDAH DI-UPGRADE
+        # LOGIKA PERBANDINGAN PERINGKAT (KHUSUS JALUR PRESTASI)
         if nomor_urut == peringkat_sebelumnya:
-            pesan = f"🎉 *Yey!* NISN `{NISN_ANAK}` masih aman *stay* di peringkat **{nomor_urut}** nih. Belum ada pendaftar baru yang menggeser posisi kita ke bawah.\nStatus: _{status_jurnal}_"
+            pesan = f"🎉 *Yey!* NISN `{NISN_ANAK}` masih aman *stay* di peringkat **{nomor_urut}** (Jalur Prestasi) nih. Poin kita masih kuat menahan pendaftar baru.\nStatus: _{status_jurnal}_"
             
         elif nomor_urut > peringkat_sebelumnya:
             selisih = nomor_urut - peringkat_sebelumnya
-            pesan = f"📉 *Yahh udah turun nih...*\nNISN `{NISN_ANAK}` turun **{selisih} posisi** ke peringkat **{nomor_urut}** (sebelumnya peringkat {peringkat_sebelumnya}).\nPasti ada pendaftar baru yang masuk dan geser posisi kita ke bawah.\nStatus: _{status_jurnal}_"
+            pesan = f"📉 *Yahh udah turun nih...*\nNISN `{NISN_ANAK}` turun **{selisih} posisi** ke peringkat **{nomor_urut}** (sebelumnya peringkat {peringkat_sebelumnya}).\nPasti ada pendaftar baru di Jalur Prestasi dengan total poin/nilai yang lebih tinggi geser posisi kita.\nStatus: _{status_jurnal}_"
             
         else:
             selisih = peringkat_sebelumnya - nomor_urut
-            pesan = f"🚀 *Wih mantap!*\nNISN `{NISN_ANAK}` malah naik **{selisih} posisi** ke peringkat **{nomor_urut}** (sebelumnya peringkat {peringkat_sebelumnya})! \nKayaknya ada pendaftar di atas kita yang cabut berkas atau gugur verifikasi.\nStatus: _{status_jurnal}_"
+            pesan = f"🚀 *Wih mantap!*\nNISN `{NISN_ANAK}` malah naik **{selisih} posisi** ke peringkat **{nomor_urut}** (sebelumnya peringkat {peringkat_sebelumnya})! \nKayaknya ada pendaftar Jalur Prestasi di atas kita yang cabut berkas atau pindah jalur.\nStatus: _{status_jurnal}_"
             
         # Update patokan peringkat untuk 15 menit ke depan
         peringkat_sebelumnya = nomor_urut 
         kirim_telegram(pesan)
     else:
-        kirim_telegram(f"❌ *Waduh bahaya!* NISN `{NISN_ANAK}` sudah tidak terdeteksi di 5 halaman pertama. Segera cek web manual untuk pastikan terlempar atau tidak!")
+        kirim_telegram(f"❌ *Waduh bahaya!* NISN `{NISN_ANAK}` sudah tidak terdeteksi di 5 halaman pertama. Segera cek web manual, takutnya terlempar dari kuota Jalur Prestasi!")
 
 def tunggu_sampai_jadwal_berikutnya():
     sekarang = datetime.datetime.now()
@@ -103,7 +103,7 @@ def tunggu_sampai_jadwal_berikutnya():
             return
 
 def jalankan_otomatis():
-    kirim_telegram("🤖 *Bot Pemantau SPMB Aktif!*\n- Mengecek web setiap 15 menit, persis di detik ke-10.\n- Ketik `/cek` kalau mau lihat update sekarang juga.")
+    kirim_telegram("🤖 *Bot Pemantau SPMB (Jalur Prestasi) Aktif!*\n- Mengecek web setiap 15 menit, persis di detik ke-10.\n- Ketik `/cek` kalau mau lihat update sekarang juga.")
     while True:
         tunggu_sampai_jadwal_berikutnya()
         cek_web()
@@ -125,7 +125,7 @@ def dengar_perintah():
                         chat_id_pengirim = str(result["message"]["chat"]["id"])
                         
                         if chat_id_pengirim in DAFTAR_CHAT_ID and pesan_masuk == "/cek":
-                            kirim_telegram("🔍 *Siap! Mengecek data langsung ke web sekarang...*")
+                            kirim_telegram("🔍 *Siap! Mengecek data Jalur Prestasi langsung ke web sekarang...*")
                             cek_web() 
         except Exception as e:
             time.sleep(5)
