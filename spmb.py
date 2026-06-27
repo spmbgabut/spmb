@@ -3,26 +3,28 @@ from bs4 import BeautifulSoup
 import time
 import threading
 import os
+import datetime
 from flask import Flask
 
 # ==========================================
 # KONFIGURASI BOT & DATA SISWA
 # ==========================================
 TOKEN = "8685597392:AAGO0Ih6aL4z9krjC8iC7DJmhr2_mdIbNRE"
-# Gunakan list [...] untuk memasukkan lebih dari 1 ID
 DAFTAR_CHAT_ID = ["7330553314", "8552443015"] 
 NISN_ANAK = "0145096765"
 URL_DASAR = "https://spmb.dindik.pekalongankota.go.id/smp/jurnal/default/detail?npsn=20329534"
+
+# Variabel untuk mengingat posisi terakhir (patokan awal)
+peringkat_sebelumnya = 33 
 # ==========================================
 
 app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Bot Pemantau SPMB Aktif 24 Jam untuk 2 Pengguna!"
+    return "Bot Pemantau SPMB Aktif 24 Jam!"
 
 def kirim_telegram(pesan):
-    # Looping: Kirim pesan satu per satu ke setiap ID yang terdaftar
     for chat_id in DAFTAR_CHAT_ID:
         url_tele = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
         payload = {"chat_id": chat_id, "text": pesan, "parse_mode": "Markdown"}
@@ -32,6 +34,7 @@ def kirim_telegram(pesan):
             print(f"Gagal mengirim ke ID {chat_id}:", e)
 
 def cek_web():
+    global peringkat_sebelumnya
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
     ditemukan = False
     nomor_urut = 0
@@ -57,23 +60,50 @@ def cek_web():
                         break
             if ditemukan:
                 break
-        except:
-            pass
+        except Exception as e:
+            print("Gagal akses web:", e)
             
     if ditemukan:
-        if nomor_urut <= 45:
-            pesan = f"✅ *STATUS AMAN!*\nNISN `{NISN_ANAK}` berada di **Peringkat {nomor_urut}**.\nStatus: *{status_jurnal}*."
-            kirim_telegram(pesan)
+        # LOGIKA PERBANDINGAN PERINGKAT
+        if nomor_urut == peringkat_sebelumnya:
+            pesan = f"🎉 *Yey masih stay {nomor_urut} nih!*\nStatus: _{status_jurnal}_"
+        elif nomor_urut > peringkat_sebelumnya:
+            pesan = f"📉 *Yahh udah turun nih ke {nomor_urut}.*\nStatus: _{status_jurnal}_"
         else:
-            pesan = f"⚠️ *PERINGATAN CADANGAN!*\nPosisi NISN `{NISN_ANAK}` turun ke **Peringkat {nomor_urut}**!\nStatus: *{status_jurnal}*.\n🚨 Hati-hati tergeser dari kuota aman!"
-            kirim_telegram(pesan)
+            pesan = f"🚀 *Wih naik peringkat nih ke {nomor_urut}!* \nStatus: _{status_jurnal}_"
+            
+        # Update patokan peringkat untuk 15 menit ke depan
+        peringkat_sebelumnya = nomor_urut 
+        kirim_telegram(pesan)
     else:
-        kirim_telegram(f"❌ *BAHAYA!*\nNISN `{NISN_ANAK}` tidak terdeteksi. Segera cek web manual!")
+        kirim_telegram(f"❌ *Waduh!* NISN `{NISN_ANAK}` nggak ketemu. Cek manual ke web buruan!")
+
+def tunggu_sampai_jadwal_berikutnya():
+    sekarang = datetime.datetime.now()
+    
+    # Mencari target waktu kelipatan 15 terdekat di detik ke-10
+    for target_menit in [0, 15, 30, 45]:
+        target_waktu = sekarang.replace(minute=0, second=10, microsecond=0)
+        
+        if target_menit == 0:
+            # Jika menit sekarang sudah lewat 45, maka target 00 ada di jam berikutnya
+            if sekarang.minute >= 45:
+                target_waktu = target_waktu + datetime.timedelta(hours=1)
+        else:
+            target_waktu = target_waktu.replace(minute=target_menit)
+            
+        selisih = (target_waktu - sekarang).total_seconds()
+        
+        # Jika selisih positif, artinya ini adalah jadwal terdekat di depan
+        if selisih > 0:
+            print(f"Menunggu {int(selisih)} detik sampai {target_waktu.strftime('%H:%M:%S')}...")
+            time.sleep(selisih)
+            return
 
 def jalankan_otomatis():
-    kirim_telegram("🤖 *Bot Pemantau SPMB (Multi-User) Aktif!*\n- Laporan masuk ke 2 akun setiap 30 menit.\n- Ketik `/cek` jika ingin mengecek sekarang.")
+    kirim_telegram("🤖 *Bot Pemantau SPMB Aktif!*\n- Mengecek web setiap 15 menit, persis di detik ke-10.\n- Ketik `/cek` kalau mau lihat update sekarang juga.")
     while True:
-        time.sleep(1800)
+        tunggu_sampai_jadwal_berikutnya()
         cek_web()
 
 def dengar_perintah():
@@ -92,19 +122,19 @@ def dengar_perintah():
                         pesan_masuk = result["message"]["text"].lower()
                         chat_id_pengirim = str(result["message"]["chat"]["id"])
                         
-                        # Cek apakah pengirim adalah salah satu dari ID terdaftar
                         if chat_id_pengirim in DAFTAR_CHAT_ID and pesan_masuk == "/cek":
-                            # Memberitahu secara spesifik siapa yang meminta pengecekan
-                            kirim_telegram(f"🔍 *Seseorang meminta pengecekan. Sedang menarik data terbaru...*")
+                            kirim_telegram("🔍 *Mengecek data di web sekarang...*")
                             cek_web() 
         except Exception as e:
             time.sleep(5)
 
 if __name__ == "__main__":
     thread_otomatis = threading.Thread(target=jalankan_otomatis)
+    thread_otomatis.daemon = True
     thread_otomatis.start()
     
     thread_perintah = threading.Thread(target=dengar_perintah)
+    thread_perintah.daemon = True
     thread_perintah.start()
     
     port = int(os.environ.get('PORT', 5000))
