@@ -4,17 +4,16 @@ import time
 import threading
 import os
 import schedule
+import concurrent.futures # <-- Modul baru untuk mempercepat pencarian
 from flask import Flask
 
 # ==========================================
 # KONFIGURASI BOT & DATA SISWA
 # ==========================================
-# Ganti dengan token aslimu (tapi ingat pesan keamanan sebelumnya ya!)
-TOKEN = "8685597392:AAGO0Ih6aL4z9krjC8iC7DJmhr2_mdIbNRE" 
+TOKEN = "8685597392:AAGO0Ih6aL4z9krjC8iC7DJmhr2_mdIbNRE" # Segera reset token ini di BotFather ya!
 DAFTAR_CHAT_ID = ["7330553314", "8552443015"] 
 NISN_ANAK = "0145096765"
 
-# Daftar lengkap 15 SMP Negeri Pekalongan
 DAFTAR_SEKOLAH = {
     "20329531": "SMPN 1 Pekalongan",
     "20329533": "SMPN 2 Pekalongan",
@@ -33,7 +32,6 @@ DAFTAR_SEKOLAH = {
     "20329532": "SMPN 15 Pekalongan"
 }
 
-# Nama file cache untuk menyimpan data nama sekolah dan peringkat terakhir
 FILE_CACHE = "data_cache_spmb.txt"
 # ==========================================
 
@@ -41,9 +39,9 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Bot Pemantau SPMB Multi-Sekolah Aktif 24 Jam!"
+    return "Bot Pemantau SPMB Super Cepat Aktif 24 Jam!"
 
-# --- FUNGSI BACA/TULIS CACHE (SEKOLAH & PERINGKAT) ---
+# --- FUNGSI BACA/TULIS CACHE ---
 def get_data_sebelumnya():
     if os.path.exists(FILE_CACHE):
         try:
@@ -62,7 +60,6 @@ def set_data_sebelumnya(nama_sekolah, peringkat):
     except Exception as e:
         print("Gagal menyimpan data:", e)
 
-# --- FUNGSI TELEGRAM ---
 def kirim_telegram(pesan):
     for chat_id in DAFTAR_CHAT_ID:
         url_tele = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
@@ -70,48 +67,57 @@ def kirim_telegram(pesan):
         try:
             requests.post(url_tele, json=payload, timeout=10)
         except Exception as e:
-            print(f"Gagal mengirim ke ID {chat_id}:", e)
+            pass
 
-# --- FUNGSI UTAMA SCRAPING ---
+# --- FUNGSI PENCARIAN 1 SEKOLAH (Dijalankan Paralel) ---
+def cek_satu_sekolah(npsn, nama_sekolah):
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+    for halaman in range(1, 6): 
+        try:
+            url_target = f"https://spmb.dindik.pekalongankota.go.id/smp/jurnal/default/detail?npsn={npsn}&page={halaman}"
+            response = requests.get(url_target, headers=headers, timeout=10)
+            soup = BeautifulSoup(response.text, 'html.parser')
+            baris_tabel = soup.find_all('tr')
+            
+            for baris in baris_tabel:
+                if NISN_ANAK in baris.text:
+                    kolom = baris.find_all('td')
+                    if len(kolom) >= 5:
+                        try:
+                            nomor_urut = int(kolom[0].text.strip())
+                        except:
+                            nomor_urut = 999
+                        status_jurnal = kolom[4].text.strip()
+                        return {
+                            "ditemukan": True, 
+                            "sekolah": nama_sekolah, 
+                            "peringkat": nomor_urut, 
+                            "status": status_jurnal
+                        }
+        except Exception:
+            continue # Abaikan error koneksi agar tidak merusak loop
+    return {"ditemukan": False}
+
+# --- FUNGSI UTAMA SCRAPING (Super Cepat) ---
 def cek_web():
     sekolah_sblm, peringkat_sblm = get_data_sebelumnya()
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+    hasil_akhir = None
     
-    ditemukan = False
-    nomor_urut = 0
-    status_jurnal = ""
-    sekolah_sekarang = ""
-    
-    for npsn, nama_sekolah in DAFTAR_SEKOLAH.items():
-        if ditemukan: 
-            break 
-            
-        for halaman in range(1, 6): 
-            try:
-                # Menggunakan URL dasar yang digabung dengan NPSN dari dictionary
-                url_target = f"https://spmb.dindik.pekalongankota.go.id/smp/jurnal/default/detail?npsn={npsn}&page={halaman}"
-                response = requests.get(url_target, headers=headers, timeout=15)
-                soup = BeautifulSoup(response.text, 'html.parser')
-                baris_tabel = soup.find_all('tr')
+    # Menjalankan 15 pencarian web secara BERSAMAAN
+    with concurrent.futures.ThreadPoolExecutor(max_workers=15) as executor:
+        futures = {executor.submit(cek_satu_sekolah, npsn, nama): nama for npsn, nama in DAFTAR_SEKOLAH.items()}
+        
+        for future in concurrent.futures.as_completed(futures):
+            hasil = future.result()
+            if hasil["ditemukan"]:
+                hasil_akhir = hasil
+                break # Begitu ketemu 1, langsung berhenti menunggu yang lain
                 
-                for baris in baris_tabel:
-                    if NISN_ANAK in baris.text:
-                        kolom = baris.find_all('td')
-                        if len(kolom) >= 5:
-                            try:
-                                nomor_urut = int(kolom[0].text.strip())
-                            except:
-                                nomor_urut = 999
-                            status_jurnal = kolom[4].text.strip()
-                            sekolah_sekarang = nama_sekolah
-                            ditemukan = True
-                            break
-                if ditemukan:
-                    break 
-            except Exception as e:
-                print(f"Gagal akses web {nama_sekolah}:", e)
-            
-    if ditemukan:
+    if hasil_akhir:
+        sekolah_sekarang = hasil_akhir["sekolah"]
+        nomor_urut = hasil_akhir["peringkat"]
+        status_jurnal = hasil_akhir["status"]
+        
         if sekolah_sblm != "" and sekolah_sekarang != sekolah_sblm:
             pesan = f"🔄 *PINDAH SEKOLAH TERDETEKSI!*\nNISN `{NISN_ANAK}` sekarang terdaftar di **{sekolah_sekarang}** pada peringkat **{nomor_urut}**.\n(Sebelumnya di {sekolah_sblm}).\nStatus: _{status_jurnal}_"
         else:
@@ -132,19 +138,18 @@ def cek_web():
     else:
         kirim_telegram(f"❌ *Peringatan!* NISN `{NISN_ANAK}` sudah tidak terdeteksi di *seluruh 15 SMP Negeri* (di 5 halaman pertama). Cek web manual sekarang!")
 
-# --- SCHEDULER (JADWAL OTOMATIS) ---
+# --- SCHEDULER & POLLING ---
 def jalankan_otomatis():
     jadwal_menit = ["00:10", "15:10", "30:10", "45:10"]
     for waktu in jadwal_menit:
         schedule.every().hour.at(waktu).do(cek_web)
 
-    kirim_telegram("🤖 *Bot Pemantau SPMB Multi-Sekolah Aktif (Restarted/Online)!*\n- Mengecek web tiap kelipatan 15 menit (detik ke-10).\n- Ketik `/cek` untuk memantau manual.")
+    kirim_telegram("🤖 *Bot Pemantau SPMB Super Cepat Aktif!*\n- Pengecekan otomatis tiap 15 menit.\n- Ketik `/cek` untuk memantau manual.")
     
     while True:
         schedule.run_pending()
         time.sleep(1)
 
-# --- POLLING TELEGRAM ---
 def dengar_perintah():
     offset = None
     while True:
@@ -162,10 +167,9 @@ def dengar_perintah():
                         chat_id_pengirim = str(result["message"]["chat"]["id"])
                         
                         if chat_id_pengirim in DAFTAR_CHAT_ID and pesan_masuk == "/cek":
-                            kirim_telegram("🔍 *Mengecek data terbaru ke 15 web sekolah pilihan...*")
+                            kirim_telegram("⚡ *Sedang nge-scan 15 sekolah sekaligus...*")
                             cek_web() 
-        except Exception as e:
-            print("Koneksi polling terputus, mencoba lagi...", e)
+        except Exception:
             time.sleep(5)
 
 if __name__ == "__main__":
