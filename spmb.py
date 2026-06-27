@@ -64,19 +64,23 @@ def cek_web():
             print("Gagal akses web:", e)
             
     if ditemukan:
-        # LOGIKA PERBANDINGAN PERINGKAT
+        # LOGIKA PERBANDINGAN PERINGKAT YANG SUDAH DI-UPGRADE
         if nomor_urut == peringkat_sebelumnya:
-            pesan = f"🎉 *Yey masih stay {nomor_urut} nih!*\nStatus: _{status_jurnal}_"
+            pesan = f"🎉 *Yey!* NISN `{NISN_ANAK}` masih aman *stay* di peringkat **{nomor_urut}** nih. Belum ada pendaftar baru yang menggeser posisi kita ke bawah.\nStatus: _{status_jurnal}_"
+            
         elif nomor_urut > peringkat_sebelumnya:
-            pesan = f"📉 *Yahh udah turun nih ke {nomor_urut}.*\nStatus: _{status_jurnal}_"
+            selisih = nomor_urut - peringkat_sebelumnya
+            pesan = f"📉 *Yahh udah turun nih...*\nNISN `{NISN_ANAK}` turun **{selisih} posisi** ke peringkat **{nomor_urut}** (sebelumnya peringkat {peringkat_sebelumnya}).\nPasti ada pendaftar baru yang masuk dan geser posisi kita ke bawah.\nStatus: _{status_jurnal}_"
+            
         else:
-            pesan = f"🚀 *Wih naik peringkat nih ke {nomor_urut}!* \nStatus: _{status_jurnal}_"
+            selisih = peringkat_sebelumnya - nomor_urut
+            pesan = f"🚀 *Wih mantap!*\nNISN `{NISN_ANAK}` malah naik **{selisih} posisi** ke peringkat **{nomor_urut}** (sebelumnya peringkat {peringkat_sebelumnya})! \nKayaknya ada pendaftar di atas kita yang cabut berkas atau gugur verifikasi.\nStatus: _{status_jurnal}_"
             
         # Update patokan peringkat untuk 15 menit ke depan
         peringkat_sebelumnya = nomor_urut 
         kirim_telegram(pesan)
     else:
-        kirim_telegram(f"❌ *Waduh!* NISN `{NISN_ANAK}` nggak ketemu. Cek manual ke web buruan!")
+        kirim_telegram(f"❌ *Waduh bahaya!* NISN `{NISN_ANAK}` sudah tidak terdeteksi di 5 halaman pertama. Segera cek web manual untuk pastikan terlempar atau tidak!")
 
 def tunggu_sampai_jadwal_berikutnya():
     sekarang = datetime.datetime.now()
@@ -86,7 +90,6 @@ def tunggu_sampai_jadwal_berikutnya():
         target_waktu = sekarang.replace(minute=0, second=10, microsecond=0)
         
         if target_menit == 0:
-            # Jika menit sekarang sudah lewat 45, maka target 00 ada di jam berikutnya
             if sekarang.minute >= 45:
                 target_waktu = target_waktu + datetime.timedelta(hours=1)
         else:
@@ -94,7 +97,6 @@ def tunggu_sampai_jadwal_berikutnya():
             
         selisih = (target_waktu - sekarang).total_seconds()
         
-        # Jika selisih positif, artinya ini adalah jadwal terdekat di depan
         if selisih > 0:
             print(f"Menunggu {int(selisih)} detik sampai {target_waktu.strftime('%H:%M:%S')}...")
             time.sleep(selisih)
@@ -123,7 +125,7 @@ def dengar_perintah():
                         chat_id_pengirim = str(result["message"]["chat"]["id"])
                         
                         if chat_id_pengirim in DAFTAR_CHAT_ID and pesan_masuk == "/cek":
-                            kirim_telegram("🔍 *Mengecek data di web sekarang...*")
+                            kirim_telegram("🔍 *Siap! Mengecek data langsung ke web sekarang...*")
                             cek_web() 
         except Exception as e:
             time.sleep(5)
