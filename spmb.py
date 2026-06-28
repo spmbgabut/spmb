@@ -9,18 +9,21 @@ import threading
 import random
 import requests
 from bs4 import BeautifulSoup
-from datetime import datetime
+from datetime import datetime, timedelta
 from flask import Flask
 import pytz
+import urllib3
+
+# Hilangkan warning SSL
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # =====================================================================
 # 💎 ULTRA VIP KONFIGURASI SISTEM 💎
 # =====================================================================
-TOKEN = "8685597392:AAGO0Ih6aL4z9krjC8iC7DJmhr2_mdIbNRE" # Wajib ganti/reset nanti di BotFather!
+TOKEN = "TOKEN_BOT_TELEGRAM_KAMU" # Isi token kamu
 DAFTAR_CHAT_ID = ["7330553314", "8552443015"] 
 NISN_ANAK = "0145096765"
 
-# Kuota Daya Tampung Asli Sekolah (Bisa disesuaikan dengan data riil)
 DAFTAR_SEKOLAH = {
     "20329531": {"nama": "SMPN 1 Pekalongan", "kuota": 200},
     "20329533": {"nama": "SMPN 2 Pekalongan", "kuota": 256},
@@ -40,248 +43,193 @@ DAFTAR_SEKOLAH = {
 }
 
 DB_NAME = "database_spmb.db"
-WAKTU_MULAI_SERVER = time.time()
 
 # =====================================================================
-# 🛠️ SISTEM LOGGING & FLASK SERVER (UNTUK RENDER)
+# 🛠️ DATABASE & FLASK (SERVER KEEP-ALIVE)
 # =====================================================================
-logging.basicConfig(
-    filename='system.log', 
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 app = Flask(__name__)
 
 @app.route('/')
 def home():
-    uptime = int(time.time() - WAKTU_MULAI_SERVER)
-    jam = uptime // 3600
-    menit = (uptime % 3600) // 60
-    return f"🚀 VIP Async SPMB Monitor is Running! Uptime: {jam}h {menit}m"
+    return "🚀 VIP Async SPMB Monitor is Running!"
 
-# =====================================================================
-# 🗄️ MANAJEMEN DATABASE SQLITE (VERSI ANTI-ERROR THREADING)
-# =====================================================================
 def get_db_connection():
-    # check_same_thread=False mencegah crash saat diakses scheduler & polling
     return sqlite3.connect(DB_NAME, check_same_thread=False)
 
 def init_db():
-    try:
-        conn = get_db_connection()
-        c = conn.cursor()
-        c.execute('''
-            CREATE TABLE IF NOT EXISTS riwayat_peringkat (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                waktu TEXT,
-                nisn TEXT,
-                sekolah TEXT,
-                peringkat INTEGER,
-                status_jurnal TEXT
-            )
-        ''')
-        conn.commit()
-        conn.close()
-    except Exception as e:
-        logging.error(f"Error Init DB: {e}")
+    conn = get_db_connection()
+    conn.execute('''CREATE TABLE IF NOT EXISTS riwayat_peringkat 
+                    (id INTEGER PRIMARY KEY AUTOINCREMENT, waktu TEXT, nisn TEXT, 
+                    sekolah TEXT, peringkat INTEGER, status_jurnal TEXT)''')
+    conn.commit()
+    conn.close()
 
 def simpan_ke_db(nisn, sekolah, peringkat, status):
-    try:
-        waktu_sekarang = dapatkan_waktu_wib()
-        conn = get_db_connection()
-        c = conn.cursor()
-        c.execute("INSERT INTO riwayat_peringkat (waktu, nisn, sekolah, peringkat, status_jurnal) VALUES (?, ?, ?, ?, ?)",
-                  (waktu_sekarang, nisn, sekolah, peringkat, status))
-        conn.commit()
-        conn.close()
-    except Exception as e:
-        logging.error(f"Error Simpan DB: {e}")
+    tz = pytz.timezone('Asia/Jakarta')
+    waktu_skrg = datetime.now(tz).strftime("%d %b %Y | %H:%M:%S")
+    conn = get_db_connection()
+    conn.execute("INSERT INTO riwayat_peringkat (waktu, nisn, sekolah, peringkat, status_jurnal) VALUES (?, ?, ?, ?, ?)",
+                 (waktu_skrg, nisn, sekolah, peringkat, status))
+    conn.commit()
+    conn.close()
 
 def ambil_data_terakhir():
-    try:
-        conn = get_db_connection()
-        c = conn.cursor()
-        c.execute("SELECT sekolah, peringkat FROM riwayat_peringkat WHERE nisn=? ORDER BY id DESC LIMIT 1", (NISN_ANAK,))
-        hasil = c.fetchone()
-        conn.close()
-        if hasil:
-            return hasil[0], hasil[1]
-    except Exception as e:
-        logging.error(f"Error Ambil Data Terakhir: {e}")
-    return "", 999
-
-def ambil_riwayat_5_terakhir():
-    try:
-        conn = get_db_connection()
-        c = conn.cursor()
-        c.execute("SELECT waktu, sekolah, peringkat FROM riwayat_peringkat WHERE nisn=? ORDER BY id DESC LIMIT 5", (NISN_ANAK,))
-        hasil = c.fetchall()
-        conn.close()
-        return hasil
-    except Exception as e:
-        logging.error(f"Error Ambil Riwayat: {e}")
-        return []
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute("SELECT sekolah, peringkat FROM riwayat_peringkat WHERE nisn=? ORDER BY id DESC LIMIT 1", (NISN_ANAK,))
+    hasil = c.fetchone()
+    conn.close()
+    return hasil if hasil else ("", 999)
 
 # =====================================================================
-# 🕰️ UTILS: WAKTU, ZONA & ANTI-BLOCK
+# 🕰️ UTILS: WAKTU & KALKULASI SINKRONISASI
 # =====================================================================
-def dapatkan_waktu_wib():
-    tz = pytz.timezone('Asia/Jakarta')
-    return datetime.now(tz).strftime("%d %b %Y | %H:%M:%S")
-
-def get_random_header():
-    user_agents = [
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36',
-        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/104.0.5112.79 Safari/537.36',
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/115.0',
-        'Mozilla/5.0 (iPhone; CPU iPhone OS 16_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.5 Mobile/15E148 Safari/604.1'
-    ]
-    return {'User-Agent': random.choice(user_agents)}
-
 def analisa_zona(peringkat, kuota):
     if peringkat == 999:
-        return "⚫ <b>TIDAK DITEMUKAN</b>", "Data hilang dari radar!"
-        
+        return "⚫ <b>ZONA HITAM</b>", "Data tidak ditemukan di sistem!"
     persentase = (peringkat / kuota) * 100
-    if persentase <= 50:
-        return "🟢 <b>AMAN TENTARAM</b>", "Bisa tidur nyenyak! Posisi solid. ☕"
+    if persentase <= 60:
+        return "🟢 <b>ZONA AMAN</b>", "Bisa tidur nyenyak! Posisi solid. ☕"
     elif persentase <= 85:
-        return "🟡 <b>WASPADA</b>", "Mulai terkejar, terus pantau pergerakan! 👀"
-    elif persentase <= 100:
-        return "🔴 <b>KRITIS DARURAT</b>", "Sangat rawan tergeser! Siapkan cabut berkas. 🚨"
+        return "🟡 <b>ZONA WASPADA</b>", "Mulai terkejar, pantau terus pergerakan! 👀"
     else:
-        return "⚫ <b>TERLEMPAR</b>", "Sudah melewati batas kuota penerimaan! 😭"
+        return "🔴 <b>ZONA KRITIS</b>", "Sangat rawan tergeser! Siapkan rencana B. 🚨"
+
+def kalkulasi_waktu_sinkron():
+    tz = pytz.timezone('Asia/Jakarta')
+    now = datetime.now(tz)
+    
+    # Cari interval 15 menit ke bawah untuk Web Terakhir
+    menit_terakhir = (now.minute // 15) * 15
+    waktu_terakhir = now.replace(minute=menit_terakhir, second=0, microsecond=0)
+    
+    # Tambah 15 menit untuk jadwal Berikutnya
+    waktu_berikutnya = waktu_terakhir + timedelta(minutes=15)
+    
+    terakhir_str = waktu_terakhir.strftime("%H:%M:00")
+    berikutnya_str = waktu_berikutnya.strftime("%H:%M:00")
+    sync_bot_str = waktu_berikutnya.replace(second=10).strftime("%H:%M:10")
+    
+    return terakhir_str, berikutnya_str, sync_bot_str
 
 # =====================================================================
-# 🚀 CORE ENGINE: SUPER FAST ASYNC SCRAPER
+# 🚀 CORE ENGINE: BULLETPROOF ASYNC SCRAPER
 # =====================================================================
 async def fetch_halaman(session, npsn, nama_sekolah, kuota, halaman):
     url_target = f"https://spmb.dindik.pekalongankota.go.id/smp/jurnal/default/detail?npsn={npsn}&page={halaman}"
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/114.0.0.0 Safari/537.36'}
+    
     try:
-        async with session.get(url_target, headers=get_random_header(), timeout=15) as response:
+        async with session.get(url_target, headers=headers, timeout=20) as response:
             if response.status == 200:
                 html = await response.text()
-                # Percepat pengecekan dengan mencari string sebelum parsing HTML penuh
                 if NISN_ANAK not in html:
                     return None
                 
                 soup = BeautifulSoup(html, 'html.parser')
                 baris_tabel = soup.find_all('tr')
+                
                 for baris in baris_tabel:
-                    if NISN_ANAK in baris.text:
-                        kolom = baris.find_all('td')
-                        if len(kolom) >= 5:
-                            try:
-                                nomor_urut = int(kolom[0].text.strip())
-                            except:
-                                nomor_urut = 999
-                            status_jurnal = kolom[4].text.strip()
-                            return {
-                                "ditemukan": True, 
-                                "sekolah": nama_sekolah, 
-                                "kuota": kuota,
-                                "peringkat": nomor_urut, 
-                                "status": status_jurnal,
-                                "url": url_target
-                            }
+                    kolom = baris.find_all('td')
+                    if len(kolom) >= 5 and NISN_ANAK in kolom[1].text:
+                        try:
+                            nomor_urut = int(kolom[0].text.strip())
+                        except ValueError:
+                            nomor_urut = 999
+                            
+                        return {
+                            "ditemukan": True, 
+                            "nama_siswa": kolom[2].text.strip(),
+                            "sekolah": nama_sekolah, 
+                            "kuota": kuota,
+                            "peringkat": nomor_urut, 
+                            "status": kolom[4].text.strip(),
+                            "url": url_target
+                        }
     except Exception as e:
-        logging.error(f"Error Async di {nama_sekolah} hal {halaman}: {e}")
+        pass
     return None
 
 async def cari_semua_sekolah_async():
     hasil_akhir = None
-    async with aiohttp.ClientSession() as session:
-        tasks = []
-        # Menembakkan 75 request serentak ke server
-        for npsn, data in DAFTAR_SEKOLAH.items():
-            for hal in range(1, 6):
-                task = asyncio.create_task(fetch_halaman(session, npsn, data["nama"], data["kuota"], hal))
-                tasks.append(task)
+    connector = aiohttp.TCPConnector(verify_ssl=False)
+    async with aiohttp.ClientSession(connector=connector) as session:
+        tasks = [asyncio.create_task(fetch_halaman(session, npsn, data["nama"], data["kuota"], hal)) 
+                 for npsn, data in DAFTAR_SEKOLAH.items() for hal in range(1, 6)]
         
-        # Begitu ketemu 1, sisa 74 request lainnya langsung dibatalkan (Super Fast)
         for future in asyncio.as_completed(tasks):
-            hasil = await future
-            if hasil and hasil.get("ditemukan"):
-                hasil_akhir = hasil
-                for t in tasks:
-                    t.cancel()
-                break
-                
+            try:
+                hasil = await future
+                if hasil and hasil.get("ditemukan"):
+                    hasil_akhir = hasil
+                    for t in tasks: t.cancel()
+                    break
+            except asyncio.CancelledError:
+                pass
     return hasil_akhir
 
 # =====================================================================
-# 📱 MANAJEMEN PESAN TELEGRAM
+# 📱 UI TELEGRAM TERBARU (VIP DASHBOARD)
 # =====================================================================
 def kirim_telegram(pesan):
     for chat_id in DAFTAR_CHAT_ID:
         url_tele = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
-        payload = {
-            "chat_id": chat_id, 
-            "text": pesan, 
-            "parse_mode": "HTML",
-            "disable_web_page_preview": True
-        }
+        payload = {"chat_id": chat_id, "text": pesan, "parse_mode": "HTML", "disable_web_page_preview": True}
         try:
-            requests.post(url_tele, json=payload, timeout=10)
+            requests.post(url_tele, json=payload, verify=False, timeout=10)
         except Exception as e:
-            logging.error(f"Gagal kirim Telegram ke {chat_id}: {e}")
+            logging.error(f"Gagal kirim Telegram: {e}")
 
-def buat_pesan_dashboard(tipe, sekolah_sekarang, kuota, nomor_urut, status, sekolah_sblm, peringkat_sblm, url):
-    waktu = dapatkan_waktu_wib()
-    label_zona, pesan_psiko = analisa_zona(nomor_urut, kuota)
+def buat_pesan_dashboard(tipe, data, sek_sblm, per_sblm):
+    terakhir, berikutnya, sync_bot = kalkulasi_waktu_sinkron()
+    peringkat = data["peringkat"]
     
-    garis_atas = "╔══════════════════════════╗"
-    garis_bawah = "╚══════════════════════════╝"
-    pembatas = "┠──────────────────────────┨"
+    label_zona, pesan_psiko = analisa_zona(peringkat, data["kuota"])
     
     if tipe == "pindah":
-        ikon = "🚨"
-        judul = "  STATUS: PINDAH SEKOLAH!   "
-        detail = f"🔄 Terlempar dari <i>{sekolah_sblm}</i>\n➡ Masuk di <b>{sekolah_sekarang}</b>"
+        ikon_judul = "🚨 <b>STATUS: PINDAH SEKOLAH!</b>"
+        detail = f"🔄 Terlempar dari <i>{sek_sblm}</i>\n➡️ Masuk di <b>{data['sekolah']}</b>"
     elif tipe == "aman":
-        ikon = "🛡️"
-        judul = "  STATUS: POSISI BERTAHAN   "
-        detail = "📌 Tidak ada pergeseran peringkat dari memori terakhir."
+        ikon_judul = "🛡️ <b>STATUS: POSISI BERTAHAN</b>"
+        detail = "📌 Tidak ada pergeseran peringkat."
     elif tipe == "turun":
-        selisih = nomor_urut - peringkat_sblm
-        ikon = "📉"
-        judul = "   STATUS: POSISI TURUN     "
-        detail = f"🔻 Turun <b>{selisih} posisi</b> dari {peringkat_sblm}."
+        ikon_judul = "📉 <b>STATUS: POSISI TURUN</b>"
+        detail = f"🔻 Turun <b>{peringkat - per_sblm} posisi</b> dari {per_sblm}."
     elif tipe == "naik":
-        selisih = peringkat_sblm - nomor_urut
-        ikon = "🚀"
-        judul = "   STATUS: POSISI NAIK!     "
-        detail = f"🟩 Naik <b>{selisih} posisi</b> dari {peringkat_sblm}."
-    elif tipe == "baru":
-        ikon = "✨"
-        judul = " STATUS: DATA DITEMUKAN     "
-        detail = "🎯 Baru masuk ke dalam sistem SPMB."
+        ikon_judul = "🚀 <b>STATUS: POSISI NAIK!</b>"
+        detail = f"🟩 Naik <b>{per_sblm - peringkat} posisi</b> dari {per_sblm}."
+    else:
+        ikon_judul = "✨ <b>STATUS: DATA DITEMUKAN</b>"
+        detail = "🎯 Baru masuk ke dalam sistem pantauan."
 
-    return f"""{garis_atas}
-{ikon} <b>{judul}</b>
-{garis_bawah}
-👨‍🎓 <b>Siswa NISN:</b> <code>{NISN_ANAK}</code>
-{pembatas}
-🏢 <b>Diterima di:</b> 
-<code>{sekolah_sekarang}</code>
+    return f"""┏━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+{ikon_judul}
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+👤 <b>Nama:</b> {data['nama_siswa']}
+💳 <b>NISN:</b> <code>{NISN_ANAK}</code>
 
-📊 <b>Peringkat:</b> <b>{nomor_urut}</b> / {kuota} Kuota
-🚥 <b>Keamanan:</b> {label_zona}
+🏫 <b>Sekolah:</b> <b>{data['sekolah']}</b>
+📊 <b>Peringkat:</b> <b>{peringkat}</b> dari {data['kuota']} Kuota
+🏷️ <b>Status Jurnal:</b> <i>{data['status']}</i>
+
+{label_zona}
 💬 <i>"{pesan_psiko}"</i>
-{pembatas}
-📋 <b>Detail Pergerakan:</b>
-{detail}
 
-🏷 <b>Status Jurnal:</b> <i>{status}</i>
-{pembatas}
-⏱️ <i>{waktu} WIB</i>
-🔗 <a href='{url}'>[ Buka Halaman Web Resmi ]</a>"""
+📈 <b>Detail Pergerakan:</b>
+{detail}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🌐 <b>JADWAL SINKRONISASI SERVER:</b>
+▪️ Update Web Terakhir: <b>{terakhir} WIB</b>
+▪️ Update Web Berikutnya: <b>{berikutnya} WIB</b>
+🤖 <i>Bot Auto-Scrape: <b>{sync_bot} WIB</b></i>
+
+🔗 <a href='{data["url"]}'>Buka Web Jurnal Resmi Dindik</a>"""
 
 # =====================================================================
-# 🧠 LOGIKA UTAMA PEMANTAUAN
+# 🧠 EKSEKUSI & SCHEDULER (10 DETIK DELAY)
 # =====================================================================
 def jalankan_cek_web_sinkron():
-    # Setup loop baru untuk asyncio agar aman di dalam threading
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:
@@ -290,143 +238,54 @@ def jalankan_cek_web_sinkron():
         loop.close()
 
 async def proses_cek_web():
-    sekolah_sblm, peringkat_sblm = ambil_data_terakhir()
+    sek_sblm, per_sblm = ambil_data_terakhir()
     hasil = await cari_semua_sekolah_async()
     
     if hasil:
-        sekolah_sekarang = hasil["sekolah"]
-        kuota = hasil["kuota"]
-        nomor_urut = hasil["peringkat"]
-        status_jurnal = hasil["status"]
-        url_target = hasil["url"]
-        
-        if sekolah_sblm != "" and sekolah_sekarang != sekolah_sblm:
-            tipe = "pindah"
-        else:
-            if nomor_urut == peringkat_sblm:
-                tipe = "aman"
-            elif nomor_urut > peringkat_sblm:
-                tipe = "turun"
-            else:
-                tipe = "baru" if peringkat_sblm == 999 else "naik"
+        tipe = "pindah" if (sek_sblm != "" and hasil["sekolah"] != sek_sblm) else \
+               ("aman" if hasil["peringkat"] == per_sblm else \
+               ("turun" if hasil["peringkat"] > per_sblm else \
+               ("baru" if per_sblm == 999 else "naik")))
                 
-        pesan = buat_pesan_dashboard(tipe, sekolah_sekarang, kuota, nomor_urut, status_jurnal, sekolah_sblm, peringkat_sblm, url_target)
-        
-        # Merekam ke history hanya jika ada perubahan angka/sekolah
+        pesan = buat_pesan_dashboard(tipe, hasil, sek_sblm, per_sblm)
         if tipe != "aman":
-            simpan_ke_db(NISN_ANAK, sekolah_sekarang, nomor_urut, status_jurnal)
-            
+            simpan_ke_db(NISN_ANAK, hasil["sekolah"], hasil["peringkat"], hasil["status"])
         kirim_telegram(pesan)
     else:
-        waktu = dapatkan_waktu_wib()
-        pesan_hilang = f"""╔══════════════════════════╗
-❌ <b>PERINGATAN KRITIS: HILANG</b> ❌
-╚══════════════════════════╝
-👨‍🎓 <b>Siswa NISN:</b> <code>{NISN_ANAK}</code>
+        tz = pytz.timezone('Asia/Jakarta')
+        waktu = datetime.now(tz).strftime("%H:%M:%S WIB")
+        kirim_telegram(f"❌ <b>DATA HILANG / WEB GANGGUAN</b> ❌\nNISN {NISN_ANAK} tidak ditemukan.\n⏱️ Update: {waktu}")
 
-⚠️ <b>STATUS DARURAT KOSONG</b>
-Data anak <b>TIDAK TERDETEKSI</b> di 15 pilihan SMP Negeri (Halaman 1-5).
-Segera cek manual atau hubungi panitia sekolah!
-┠──────────────────────────┨
-⏱️ <i>{waktu} WIB</i>"""
-        kirim_telegram(pesan_hilang)
+def jalankan_jadwal_otomatis():
+    # Menjadwalkan bot sinkronisasi tepat di detik ke-10 setiap interval 15 menit
+    schedule.every().hour.at("00:10").do(jalankan_cek_web_sinkron)
+    schedule.every().hour.at("15:10").do(jalankan_cek_web_sinkron)
+    schedule.every().hour.at("30:10").do(jalankan_cek_web_sinkron)
+    schedule.every().hour.at("45:10").do(jalankan_cek_web_sinkron)
 
-# =====================================================================
-# 🤖 BOT COMMAND HANDLER & POLLING
-# =====================================================================
-def proses_perintah(pesan_masuk, chat_id):
-    pesan_masuk = pesan_masuk.lower()
-    
-    if pesan_masuk == "/start":
-        kirim_telegram("Halo! Saya adalah Bot VIP Pemantau SPMB. Ketik /help untuk melihat menu.")
-        
-    elif pesan_masuk == "/help":
-        menu = """📚 <b>DAFTAR PERINTAH VIP BOT</b> 📚
-<code>/cek</code> - Pindai web 15 sekolah sekarang juga (Super Fast)
-<code>/status</code> - Lihat posisi data terakhir yang tersimpan di memori
-<code>/riwayat</code> - Lihat 5 sejarah pergerakan peringkat terakhir
-<code>/ping</code> - Cek uptime server bot"""
-        kirim_telegram(menu)
-        
-    elif pesan_masuk == "/cek":
-        awal = time.time()
-        kirim_telegram("⚡ <i>Mengirim 75 request serentak ke server SPMB...</i>")
-        jalankan_cek_web_sinkron()
-        durasi = round(time.time() - awal, 2)
-        kirim_telegram(f"⏱️ <i>Pencarian Super Fast selesai dalam {durasi} detik!</i>")
-        
-    elif pesan_masuk == "/status":
-        sek, per = ambil_data_terakhir()
-        if sek:
-            kirim_telegram(f"📌 <b>STATUS MEMORI TERAKHIR:</b>\nSekolah: <b>{sek}</b>\nPeringkat: <b>{per}</b>")
-        else:
-            kirim_telegram("Belum ada data tersimpan. Ketik /cek.")
-            
-    elif pesan_masuk == "/riwayat":
-        riwayat = ambil_riwayat_5_terakhir()
-        if riwayat:
-            teks_riwayat = "📜 <b>5 RIWAYAT PERGERAKAN TERAKHIR:</b>\n\n"
-            for r in riwayat:
-                teks_riwayat += f"🗓️ {r[0]}\n🏫 {r[1]} - Peringkat <b>{r[2]}</b>\n\n"
-            kirim_telegram(teks_riwayat)
-        else:
-            kirim_telegram("Belum ada sejarah pergerakan yang tersimpan di Database.")
-            
-    elif pesan_masuk == "/ping":
-        uptime = int(time.time() - WAKTU_MULAI_SERVER)
-        m, s = divmod(uptime, 60)
-        h, m = divmod(m, 60)
-        kirim_telegram(f"🟢 <b>Server Aktif & Sehat!</b>\nUptime: {h} jam, {m} menit, {s} detik.")
+    while True:
+        schedule.run_pending()
+        time.sleep(1)
 
 def dengar_telegram_terus_menerus():
     offset = None
     while True:
         try:
             url_get = f"https://api.telegram.org/bot{TOKEN}/getUpdates"
-            params = {"timeout": 30, "offset": offset}
-            response = requests.get(url_get, params=params, timeout=40).json()
-            
-            if response.get("ok"):
-                for result in response.get("result", []):
-                    offset = result["update_id"] + 1
-                    
-                    if "message" in result and "text" in result["message"]:
-                        pesan_teks = result["message"]["text"]
-                        chat_id = str(result["message"]["chat"]["id"])
-                        
-                        if chat_id in DAFTAR_CHAT_ID:
-                            threading.Thread(target=proses_perintah, args=(pesan_teks, chat_id)).start()
-        except Exception as e:
+            res = requests.get(url_get, params={"timeout": 30, "offset": offset}, verify=False, timeout=40).json()
+            if res.get("ok"):
+                for r in res.get("result", []):
+                    offset = r["update_id"] + 1
+                    if "message" in r and "text" in r["message"] and str(r["message"]["chat"]["id"]) in DAFTAR_CHAT_ID:
+                        if "/cek" in r["message"]["text"].lower():
+                            kirim_telegram("⚡ <i>Menyapu bersih data dari server Dindik...</i>")
+                            jalankan_cek_web_sinkron()
+        except:
             time.sleep(5)
-
-# =====================================================================
-# 🗓️ SCHEDULER & INISIALISASI UTAMA
-# =====================================================================
-def jalankan_jadwal_otomatis():
-    jadwal_menit = ["00:05", "15:05", "30:05", "45:05"]
-    for waktu in jadwal_menit:
-        schedule.every().hour.at(waktu).do(jalankan_cek_web_sinkron)
-
-    pesan_start = """💎 <b>VIP ASYNC MONITOR AKTIF</b> 💎
-Server Database & Polling berhasil dinyalakan.
-
-⚙️ <b>Sistem Aktif:</b>
-✅ 75x Async Concurrent Scraping
-✅ Auto-Rotate Anti-Block Agent
-✅ Database History Management
-
-Ketik <code>/help</code> untuk daftar perintah."""
-    kirim_telegram(pesan_start)
-    
-    while True:
-        schedule.run_pending()
-        time.sleep(1)
 
 if __name__ == "__main__":
     init_db()
-    
+    # Mengaktifkan Scheduler dan Polling secara bersamaan
     threading.Thread(target=jalankan_jadwal_otomatis, daemon=True).start()
     threading.Thread(target=dengar_telegram_terus_menerus, daemon=True).start()
-    
-    port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port)
+    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
