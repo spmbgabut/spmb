@@ -185,13 +185,14 @@ async def fetch_halaman(session, npsn, nama_sekolah, kuota, halaman):
         async with session.get(url_target, headers=get_real_headers(), timeout=20) as response:
             if response.status == 200:
                 html = await response.text()
+                # Pencarian diperluas, antisipasi invisible space pada HTML
                 if NISN_ANAK not in html:
                     return {"status": "not_found"}
                 
                 soup = BeautifulSoup(html, 'html.parser')
                 baris_tabel = soup.find_all('tr')
                 for baris in baris_tabel:
-                    if NISN_ANAK in baris.text: 
+                    if NISN_ANAK in baris.text:  # Deteksi lebih kuat per baris
                         kolom = baris.find_all('td')
                         try:
                             nomor_urut = int(kolom[0].text.strip())
@@ -231,6 +232,7 @@ async def cari_semua_sekolah_async():
     error_count = 0
     timeout_count = 0
     
+    # KUNCI ANTI-BANNED: Membatasi koneksi maksimal 3 sekaligus agar tidak disangka DDoS
     connector = aiohttp.TCPConnector(verify_ssl=False, limit=3) 
     
     async with aiohttp.ClientSession(connector=connector) as session:
@@ -245,7 +247,7 @@ async def cari_semua_sekolah_async():
             if hasil:
                 if hasil["status"] == "found":
                     hasil_akhir = hasil["data"]
-                    for t in tasks: t.cancel()
+                    for t in tasks: t.cancel() # Langsung batalkan sisa request
                     break
                 elif "error" in hasil["status"]:
                     error_count += 1
@@ -255,10 +257,9 @@ async def cari_semua_sekolah_async():
     return hasil_akhir, error_count, timeout_count
 
 # =====================================================================
-# 📱 MANAJEMEN PESAN TELEGRAM (DENGAN FITUR AUTO-DELETE)
+# 📱 MANAJEMEN PESAN TELEGRAM
 # =====================================================================
 def kirim_telegram(pesan):
-    pesan_terkirim = []
     for chat_id in DAFTAR_CHAT_ID:
         url_tele = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
         payload = {
@@ -268,25 +269,9 @@ def kirim_telegram(pesan):
             "disable_web_page_preview": True
         }
         try:
-            # Mengambil response dari Telegram untuk mendapatkan ID Pesan
-            res = requests.post(url_tele, json=payload, verify=False, timeout=10).json()
-            if res.get("ok"):
-                pesan_terkirim.append((chat_id, res["result"]["message_id"]))
+            requests.post(url_tele, json=payload, verify=False, timeout=10)
         except Exception as e:
             logging.error(f"Gagal kirim Telegram ke {chat_id}: {e}")
-    
-    # Kembalikan List ID Pesan agar bisa dihapus nanti
-    return pesan_terkirim
-
-def hapus_pesan_telegram(daftar_pesan):
-    # Fungsi baru untuk menghapus pesan berdasarkan Chat ID & Message ID
-    for chat_id, message_id in daftar_pesan:
-        url_tele = f"https://api.telegram.org/bot{TOKEN}/deleteMessage"
-        payload = {"chat_id": chat_id, "message_id": message_id}
-        try:
-            requests.post(url_tele, json=payload, verify=False, timeout=5)
-        except Exception as e:
-            logging.error(f"Gagal hapus pesan: {e}")
 
 def buat_pesan_dashboard(tipe, data_scraping, sekolah_sblm, peringkat_sblm):
     terakhir, berikutnya, sync_bot = kalkulasi_waktu_sinkron()
@@ -382,6 +367,7 @@ async def proses_cek_web():
         kirim_telegram(pesan)
         
     else:
+        # Peringatan Cerdas: Membedakan mana yang beneran hilang dan mana yang servernya gangguan
         if error_count > 0 or timeout_count > 0:
             pesan_error = f"""⚠️ <b>SERVER DINDIK GANGGUAN / SIBUK</b> ⚠️
 Bot ditolak oleh server web pemerintah.
@@ -422,24 +408,10 @@ def proses_perintah(pesan_masuk, chat_id):
         
     elif pesan_masuk == "/cek":
         awal = time.time()
-        
-        # 1. KIRIM PESAN LOADING & SIMPAN ID-NYA
-        pesan_loading = kirim_telegram("⚡ <i>Memproses sinkronisasi data dengan server SPMB...</i>")
-        
-        # 2. MULAI MENCARI DATA (Pesan hasil akan otomatis dikirim di dalam fungsi ini)
+        kirim_telegram("⚡ <i>Menyelusup ke server SPMB (Anti-Banned Mode)...</i>")
         jalankan_cek_web_sinkron()
-        
-        # 3. SETELAH SELESAI, HAPUS PESAN LOADING
-        if pesan_loading:
-            hapus_pesan_telegram(pesan_loading)
-            
-        # 4. KIRIM PESAN DURASI LALU HAPUS OTOMATIS SETELAH 5 DETIK
         durasi = round(time.time() - awal, 2)
-        pesan_durasi = kirim_telegram(f"⏱️ <i>Pencarian sukses dalam {durasi} detik!</i>")
-        
-        time.sleep(5) # Jeda 5 detik biar kamu bisa baca sebentar
-        if pesan_durasi:
-            hapus_pesan_telegram(pesan_durasi) # Langsung sapu bersih!
+        kirim_telegram(f"⏱️ <i>Pencarian aman selesai dalam {durasi} detik!</i>")
         
     elif pesan_masuk == "/status":
         sek, per = ambil_data_terakhir()
@@ -481,8 +453,7 @@ def dengar_telegram_terus_menerus():
                         chat_id = str(result["message"]["chat"]["id"])
                         
                         if chat_id in DAFTAR_CHAT_ID:
-                            # Pakai daemon thread biar tidak mengganggu proses lain
-                            threading.Thread(target=proses_perintah, args=(pesan_teks, chat_id), daemon=True).start()
+                            threading.Thread(target=proses_perintah, args=(pesan_teks, chat_id)).start()
         except Exception as e:
             time.sleep(5)
 
@@ -502,7 +473,6 @@ Server Database & Polling berhasil dinyalakan.
 ✅ Bypass WAF & Cloudflare Headers
 ✅ Database History Management
 ✅ Delay 10 Detik Sync Mode
-🧹 Auto-Clean Chat History (Anti-Spam)
 
 Ketik <code>/help</code> untuk daftar perintah."""
     kirim_telegram(pesan_start)
