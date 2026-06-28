@@ -132,13 +132,14 @@ def dapatkan_waktu_wib():
     tz = pytz.timezone('Asia/Jakarta')
     return datetime.now(tz).strftime("%d %b %Y | %H:%M:%S")
 
-def get_random_header():
-    user_agents = [
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36',
-        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/104.0.5112.79 Safari/537.36',
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/115.0'
-    ]
-    return {'User-Agent': random.choice(user_agents)}
+def get_real_headers():
+    return {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+        'Accept-Language': 'id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7',
+        'Connection': 'keep-alive',
+        'Referer': 'https://spmb.dindik.pekalongankota.go.id/smp/jurnal/default'
+    }
 
 def analisa_zona(peringkat, kuota):
     if peringkat == 999:
@@ -165,7 +166,6 @@ def buat_progress_bar(peringkat, kuota):
 def kalkulasi_waktu_sinkron():
     tz = pytz.timezone('Asia/Jakarta')
     now = datetime.now(tz)
-    # Membulatkan ke bawah ke interval 15 menit terdekat
     menit_terakhir = (now.minute // 15) * 15
     waktu_terakhir = now.replace(minute=menit_terakhir, second=0, microsecond=0)
     waktu_berikutnya = waktu_terakhir + timedelta(minutes=15)
@@ -177,28 +177,27 @@ def kalkulasi_waktu_sinkron():
     return terakhir_str, berikutnya_str, sync_bot_str
 
 # =====================================================================
-# 🚀 CORE ENGINE: SUPER FAST ASYNC SCRAPER
+# 🚀 CORE ENGINE: ANTI-BANNED & SMART SCRAPER
 # =====================================================================
 async def fetch_halaman(session, npsn, nama_sekolah, kuota, halaman):
     url_target = f"https://spmb.dindik.pekalongankota.go.id/smp/jurnal/default/detail?npsn={npsn}&page={halaman}"
     try:
-        async with session.get(url_target, headers=get_random_header(), timeout=15) as response:
+        async with session.get(url_target, headers=get_real_headers(), timeout=20) as response:
             if response.status == 200:
                 html = await response.text()
                 if NISN_ANAK not in html:
-                    return None
+                    return {"status": "not_found"}
                 
                 soup = BeautifulSoup(html, 'html.parser')
                 baris_tabel = soup.find_all('tr')
                 for baris in baris_tabel:
-                    kolom = baris.find_all('td')
-                    if len(kolom) >= 5 and NISN_ANAK in kolom[1].text:
+                    if NISN_ANAK in baris.text: 
+                        kolom = baris.find_all('td')
                         try:
                             nomor_urut = int(kolom[0].text.strip())
                         except:
                             nomor_urut = 999
                             
-                        # Aman: Coba ambil data ekstra jika kolomnya ada
                         nama_siswa = kolom[2].text.strip() if len(kolom) > 2 else "Tidak Terdeteksi"
                         asal_sd = kolom[3].text.strip() if len(kolom) > 3 else "-"
                         status_jurnal = kolom[4].text.strip() if len(kolom) > 4 else "Terjurnal"
@@ -206,25 +205,34 @@ async def fetch_halaman(session, npsn, nama_sekolah, kuota, halaman):
                         usia = kolom[8].text.strip() if len(kolom) > 8 else "-"
 
                         return {
-                            "ditemukan": True, 
-                            "nama_siswa": nama_siswa,
-                            "asal_sd": asal_sd,
-                            "jarak": jarak,
-                            "usia": usia,
-                            "sekolah": nama_sekolah, 
-                            "kuota": kuota,
-                            "peringkat": nomor_urut, 
-                            "status": status_jurnal,
-                            "url": url_target
+                            "status": "found", 
+                            "data": {
+                                "nama_siswa": nama_siswa,
+                                "asal_sd": asal_sd,
+                                "jarak": jarak,
+                                "usia": usia,
+                                "sekolah": nama_sekolah, 
+                                "kuota": kuota,
+                                "peringkat": nomor_urut, 
+                                "status": status_jurnal,
+                                "url": url_target
+                            }
                         }
+                return {"status": "not_found"}
+            else:
+                return {"status": f"error_{response.status}"}
+    except asyncio.TimeoutError:
+        return {"status": "timeout"}
     except Exception as e:
-        logging.error(f"Error Async di {nama_sekolah} hal {halaman}: {e}")
-    return None
+        return {"status": "error"}
 
 async def cari_semua_sekolah_async():
     hasil_akhir = None
-    # WAJIB verify_ssl=False untuk server Render
-    connector = aiohttp.TCPConnector(verify_ssl=False)
+    error_count = 0
+    timeout_count = 0
+    
+    connector = aiohttp.TCPConnector(verify_ssl=False, limit=3) 
+    
     async with aiohttp.ClientSession(connector=connector) as session:
         tasks = []
         for npsn, data in DAFTAR_SEKOLAH.items():
@@ -234,18 +242,23 @@ async def cari_semua_sekolah_async():
         
         for future in asyncio.as_completed(tasks):
             hasil = await future
-            if hasil and hasil.get("ditemukan"):
-                hasil_akhir = hasil
-                for t in tasks:
-                    t.cancel()
-                break
+            if hasil:
+                if hasil["status"] == "found":
+                    hasil_akhir = hasil["data"]
+                    for t in tasks: t.cancel()
+                    break
+                elif "error" in hasil["status"]:
+                    error_count += 1
+                elif hasil["status"] == "timeout":
+                    timeout_count += 1
                 
-    return hasil_akhir
+    return hasil_akhir, error_count, timeout_count
 
 # =====================================================================
-# 📱 MANAJEMEN PESAN TELEGRAM
+# 📱 MANAJEMEN PESAN TELEGRAM (DENGAN FITUR AUTO-DELETE)
 # =====================================================================
 def kirim_telegram(pesan):
+    pesan_terkirim = []
     for chat_id in DAFTAR_CHAT_ID:
         url_tele = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
         payload = {
@@ -255,9 +268,25 @@ def kirim_telegram(pesan):
             "disable_web_page_preview": True
         }
         try:
-            requests.post(url_tele, json=payload, verify=False, timeout=10)
+            # Mengambil response dari Telegram untuk mendapatkan ID Pesan
+            res = requests.post(url_tele, json=payload, verify=False, timeout=10).json()
+            if res.get("ok"):
+                pesan_terkirim.append((chat_id, res["result"]["message_id"]))
         except Exception as e:
             logging.error(f"Gagal kirim Telegram ke {chat_id}: {e}")
+    
+    # Kembalikan List ID Pesan agar bisa dihapus nanti
+    return pesan_terkirim
+
+def hapus_pesan_telegram(daftar_pesan):
+    # Fungsi baru untuk menghapus pesan berdasarkan Chat ID & Message ID
+    for chat_id, message_id in daftar_pesan:
+        url_tele = f"https://api.telegram.org/bot{TOKEN}/deleteMessage"
+        payload = {"chat_id": chat_id, "message_id": message_id}
+        try:
+            requests.post(url_tele, json=payload, verify=False, timeout=5)
+        except Exception as e:
+            logging.error(f"Gagal hapus pesan: {e}")
 
 def buat_pesan_dashboard(tipe, data_scraping, sekolah_sblm, peringkat_sblm):
     terakhir, berikutnya, sync_bot = kalkulasi_waktu_sinkron()
@@ -328,7 +357,9 @@ def jalankan_cek_web_sinkron():
 
 async def proses_cek_web():
     sekolah_sblm, peringkat_sblm = ambil_data_terakhir()
-    hasil = await cari_semua_sekolah_async()
+    hasil, error_count, timeout_count = await cari_semua_sekolah_async()
+    
+    waktu = dapatkan_waktu_wib()
     
     if hasil:
         sekolah_sekarang = hasil["sekolah"]
@@ -346,24 +377,31 @@ async def proses_cek_web():
                 tipe = "baru" if peringkat_sblm == 999 else "naik"
                 
         pesan = buat_pesan_dashboard(tipe, hasil, sekolah_sblm, peringkat_sblm)
-        
         if tipe != "aman":
             simpan_ke_db(NISN_ANAK, sekolah_sekarang, nomor_urut, status_jurnal)
-            
         kirim_telegram(pesan)
+        
     else:
-        waktu = dapatkan_waktu_wib()
-        pesan_hilang = f"""╔══════════════════════════╗
+        if error_count > 0 or timeout_count > 0:
+            pesan_error = f"""⚠️ <b>SERVER DINDIK GANGGUAN / SIBUK</b> ⚠️
+Bot ditolak oleh server web pemerintah.
+Terdeteksi: <b>{error_count} Blocked</b> & <b>{timeout_count} Timeout</b>.
+
+<i>Bot mengantre ulang agar tidak disangka serangan DDoS...</i>
+⏱️ <i>{waktu} WIB</i>"""
+            kirim_telegram(pesan_error)
+        else:
+            pesan_hilang = f"""╔══════════════════════════╗
 ❌ <b>PERINGATAN KRITIS: HILANG</b> ❌
 ╚══════════════════════════╝
 👨‍🎓 <b>Siswa NISN:</b> <code>{NISN_ANAK}</code>
 
 ⚠️ <b>STATUS DARURAT KOSONG</b>
-Data anak <b>TIDAK TERDETEKSI</b> di 15 pilihan SMP Negeri (Halaman 1-5).
+Data anak benar-benar <b>TIDAK TERDETEKSI</b> di 15 pilihan SMP Negeri.
 Segera cek manual atau hubungi panitia sekolah!
 ┠──────────────────────────┨
 ⏱️ <i>{waktu} WIB</i>"""
-        kirim_telegram(pesan_hilang)
+            kirim_telegram(pesan_hilang)
 
 # =====================================================================
 # 🤖 BOT COMMAND HANDLER & POLLING
@@ -376,7 +414,7 @@ def proses_perintah(pesan_masuk, chat_id):
         
     elif pesan_masuk == "/help":
         menu = """📚 <b>DAFTAR PERINTAH VIP BOT</b> 📚
-<code>/cek</code> - Pindai web 15 sekolah sekarang juga (Super Fast)
+<code>/cek</code> - Pindai web 15 sekolah sekarang juga
 <code>/status</code> - Lihat posisi data terakhir yang tersimpan di memori
 <code>/riwayat</code> - Lihat 5 sejarah pergerakan peringkat terakhir
 <code>/ping</code> - Cek uptime server bot"""
@@ -384,10 +422,24 @@ def proses_perintah(pesan_masuk, chat_id):
         
     elif pesan_masuk == "/cek":
         awal = time.time()
-        kirim_telegram("⚡ <i>Mengirim 75 request serentak ke server SPMB...</i>")
+        
+        # 1. KIRIM PESAN LOADING & SIMPAN ID-NYA
+        pesan_loading = kirim_telegram("⚡ <i>Memproses sinkronisasi data dengan server SPMB...</i>")
+        
+        # 2. MULAI MENCARI DATA (Pesan hasil akan otomatis dikirim di dalam fungsi ini)
         jalankan_cek_web_sinkron()
+        
+        # 3. SETELAH SELESAI, HAPUS PESAN LOADING
+        if pesan_loading:
+            hapus_pesan_telegram(pesan_loading)
+            
+        # 4. KIRIM PESAN DURASI LALU HAPUS OTOMATIS SETELAH 5 DETIK
         durasi = round(time.time() - awal, 2)
-        kirim_telegram(f"⏱️ <i>Pencarian Super Fast selesai dalam {durasi} detik!</i>")
+        pesan_durasi = kirim_telegram(f"⏱️ <i>Pencarian sukses dalam {durasi} detik!</i>")
+        
+        time.sleep(5) # Jeda 5 detik biar kamu bisa baca sebentar
+        if pesan_durasi:
+            hapus_pesan_telegram(pesan_durasi) # Langsung sapu bersih!
         
     elif pesan_masuk == "/status":
         sek, per = ambil_data_terakhir()
@@ -418,7 +470,6 @@ def dengar_telegram_terus_menerus():
         try:
             url_get = f"https://api.telegram.org/bot{TOKEN}/getUpdates"
             params = {"timeout": 30, "offset": offset}
-            # verify=False ditambahkan agar Render tidak memblokir request Telegram
             response = requests.get(url_get, params=params, verify=False, timeout=40).json()
             
             if response.get("ok"):
@@ -430,7 +481,8 @@ def dengar_telegram_terus_menerus():
                         chat_id = str(result["message"]["chat"]["id"])
                         
                         if chat_id in DAFTAR_CHAT_ID:
-                            threading.Thread(target=proses_perintah, args=(pesan_teks, chat_id)).start()
+                            # Pakai daemon thread biar tidak mengganggu proses lain
+                            threading.Thread(target=proses_perintah, args=(pesan_teks, chat_id), daemon=True).start()
         except Exception as e:
             time.sleep(5)
 
@@ -438,7 +490,6 @@ def dengar_telegram_terus_menerus():
 # 🗓️ SCHEDULER & INISIALISASI UTAMA
 # =====================================================================
 def jalankan_jadwal_otomatis():
-    # Menjadwalkan bot di detik ke-10 (MM:SS) setiap interval 15 menit
     jadwal_menit_detik = ["00:10", "15:10", "30:10", "45:10"]
     for waktu in jadwal_menit_detik:
         schedule.every().hour.at(waktu).do(jalankan_cek_web_sinkron)
@@ -447,10 +498,11 @@ def jalankan_jadwal_otomatis():
 Server Database & Polling berhasil dinyalakan.
 
 ⚙️ <b>Sistem Aktif:</b>
-✅ 75x Async Concurrent Scraping
-✅ Auto-Rotate Anti-Block Agent
+✅ Smart Auto-Scraping (Limit 3/sec)
+✅ Bypass WAF & Cloudflare Headers
 ✅ Database History Management
 ✅ Delay 10 Detik Sync Mode
+🧹 Auto-Clean Chat History (Anti-Spam)
 
 Ketik <code>/help</code> untuk daftar perintah."""
     kirim_telegram(pesan_start)
