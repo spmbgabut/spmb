@@ -28,7 +28,7 @@ DAFTAR_SEKOLAH = {
     "20329535": {"nama": "SMPN 4 Pekalongan", "kuota": 220},
     "20331635": {"nama": "SMPN 5 Pekalongan", "kuota": 200},
     "20329536": {"nama": "SMPN 6 Pekalongan", "kuota": 200},
-    "20329547": {"nama": "SMPN 7 Pekalongan", "kuota": 200},
+    "20329547": {"nama": "SMPN 7 Pekalongan", "kuota": 67},
     "20331636": {"nama": "SMPN 8 Pekalongan", "kuota": 200},
     "20331637": {"nama": "SMPN 9 Pekalongan", "kuota": 200},
     "20331628": {"nama": "SMPN 10 Pekalongan", "kuota": 200},
